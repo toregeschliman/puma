@@ -20,6 +20,7 @@
   * You can now fork workers from worker 0 using SIGURG w/o fork_worker enabled [#2449]
   * Add option to bind to systemd activated sockets ([#2362])
   * Add compile option to change the `QUERY_STRING` max length ([#2485])
+  * Add ability to set OpenSSL verification flags (MRI only) ([#2490])
 
 * Bugfixes
   * Fix JRuby handling in Puma::DSL#ssl_bind ([#2489])

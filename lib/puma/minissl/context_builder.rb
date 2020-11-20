@@ -62,6 +62,12 @@ module Puma
                             end
         end
 
+        if params['verification_flags']
+          ctx.verification_flags = Array(params['verification_flags']).
+            map { |flag| MiniSSL::VERIFICATION_FLAGS.fetch(flag) }.
+            inject { |sum, flag| sum ? sum | flag : flag }
+        end
+
         ctx
       end
 
