@@ -33,6 +33,7 @@ module Puma
     def stop_workers
       log "- Gracefully shutting down workers..."
       @workers.each { |x| x.term }
+      @fork_writer.stop
 
       begin
         loop do
@@ -100,14 +101,19 @@ module Puma
       end
     end
 
-    def promote_molds(refork = false)
+    def promote_mold
       return unless @options[:fork_worker]
       # this will need re-working when we want to support generational molds
       return unless mold_candidate = @workers.detect { |w| w.index == 0 } # we need a worker zero to promote
       return if mold_candidate.mold? # worker zero is already a mold
+      return unless mold_candidate.booted? # if not booted, hasn't done any work, don't need to mold
 
+      # the logic part
+      # if we are booting, we do _not_ want to promote a mold
+      # otherwise we do
       diff = @options[:workers] - @workers.size
-      return if diff.zero? || !refork # if we are triggering a full refork, workers will get terminated shortly anyway
+      return if diff.zero? # nothing to refork, no reason to promote to mold yet
+      log "non-zero diff and reforking"
 
       # send a signal to worker zero to stop handling traffic
       @fork_writer.start_refork
@@ -196,7 +202,7 @@ module Puma
       timeout_workers
       wait_workers
       cull_workers
-      promote_molds(refork)
+      promote_mold
       spawn_workers
 
       if all_workers_booted?
@@ -604,6 +610,11 @@ module Puma
           # 2. When `fork_worker` is enabled, some worker may not be direct children,
           #    but grand children.  Because of this they won't be reaped by `Process.wait2(-1)`.
           if reaped_children.delete(w.pid) || Process.wait(w.pid, Process::WNOHANG)
+
+            # if fork_worker is active and a mold process is being terminated,
+            # drop worker count again as worker zero will take traffic again
+            @options[:workers] -= 1 if w.mold?
+
             true
           else
             w.term if w.term?

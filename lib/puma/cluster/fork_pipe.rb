@@ -11,6 +11,7 @@ module Puma
       RESTART_SERVER = 0
       START_REFORK = -1
       AFTER_REFORK = -2
+      STOP = -3
 
       # avoids allocation of objects while reading
       # only reads 1 payload at a time (minimize data loss if process exits unexpectedly)
@@ -90,6 +91,10 @@ module Puma
 
       def restart_server
         self << ForkPipeReader::RESTART_SERVER
+      end
+
+      def stop
+        self << ForkPipeReader::STOP
       end
 
       def close

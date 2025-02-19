@@ -88,6 +88,8 @@ module Puma
             when ForkPipeReader::RESTART_SERVER
               restart_server << true << false
               break
+            when ForkPipeReader::STOP
+              return
             else
               worker_pids << pid = spawn_worker(idx)
               @worker_write << "#{PIPE_FORK}#{pid}:#{idx}\n" rescue nil
@@ -152,6 +154,7 @@ module Puma
         end
 
         if fork_worker && @index.zero? # time for mold phase
+          $0 = title.gsub("puma: cluster worker", "puma: cluster mold")
           loop do
             case (idx = @fork_pipe.read)
             when ForkPipeReader::START_REFORK
@@ -160,6 +163,8 @@ module Puma
               @config.run_hooks(:after_refork, nil, @log_writer, @hook_data)
             when ForkPipeReader::RESTART_SERVER
               # we are now a mold, we don't restart the server anymore
+            when ForkPipeReader::STOP
+              break
             else
               worker_pids << pid = spawn_worker(idx)
               @worker_write << "#{PIPE_FORK}#{pid}:#{idx}\n" rescue nil
