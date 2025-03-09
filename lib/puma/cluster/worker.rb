@@ -25,6 +25,7 @@ module Puma
         @wakeup = pipes[:wakeup]
         @server = server
         @hook_data = {}
+        @mold = false
       end
 
       def run
@@ -34,6 +35,7 @@ module Puma
 
         Signal.trap "SIGINT", "IGNORE"
         Signal.trap "SIGCHLD", "DEFAULT"
+        Signal.trap "SIGURG", "DEFAULT"
 
         Thread.new do
           Puma.set_thread_name "wrkr check"
@@ -65,38 +67,23 @@ module Puma
           exit 1
         end
 
-        restart_server = Queue.new << true << false
+        restart_server = @restart_server ||= Queue.new << true << false
 
         fork_worker = @options[:fork_worker] && index == 0
 
         if fork_worker
           restart_server.clear
-          worker_pids = []
+          worker_pids = @worker_pids ||= []
           Signal.trap "SIGCHLD" do
             wakeup! if worker_pids.reject! do |p|
               Process.wait(p, Process::WNOHANG) rescue true
             end
           end
-
-          Thread.new do
-            Puma.set_thread_name "wrkr fork"
-            while (idx = @fork_pipe.gets)
-              idx = idx.to_i
-              if idx == -1 # stop server
-                if restart_server.length > 0
-                  restart_server.clear
-                  server.begin_restart(true)
-                  @config.run_hooks(:before_refork, nil, @log_writer, @hook_data)
-                end
-              elsif idx == -2 # refork cycle is done
-                @config.run_hooks(:after_refork, nil, @log_writer, @hook_data)
-              elsif idx == 0 # restart server
-                restart_server << true << false
-              else # fork worker
-                worker_pids << pid = spawn_worker(idx)
-                @worker_write << "#{PIPE_FORK}#{pid}:#{idx}\n" rescue nil
-              end
-            end
+          Signal.trap "SIGURG" do
+            @mold = true
+            restart_server.clear
+            restart_server << false
+            server.begin_restart(true)
           end
         end
 
@@ -146,15 +133,46 @@ module Puma
           server_thread.join
         end
 
+        if fork_worker && @mold
+          fork_worker_loop
+        end
+
         # Invoke any worker shutdown hooks so they can prevent the worker
         # exiting until any background operations are completed
         @config.run_hooks(:before_worker_shutdown, index, @log_writer, @hook_data)
       ensure
+        if @mold
+          @worker_write << "#{PIPE_MOLD_TERM}\n" rescue nil
+        end
         @worker_write << "#{PIPE_TERM}#{Process.pid}\n" rescue nil
         @worker_write.close
       end
 
       private
+
+      def fork_worker_loop
+        forking = true
+
+        Signal.trap("SIGTERM") do
+          forking = false
+          @worker_write << "#{PIPE_EXTERNAL_TERM}#{Process.pid}\n" rescue nil
+        end
+
+        worker_pids = @worker_pids
+        while !forking && (idx = @fork_pipe.gets)
+          idx = idx.to_i
+          if idx == -1 # run before_refork hooks
+            @config.run_hooks(:before_refork, nil, @log_writer, @hook_data)
+          elsif idx == -2 # run after_refork hooks
+            @config.run_hooks(:after_refork, nil, @log_writer, @hook_data)
+          elsif idx == 0
+            # do nothing, we don't restart the server anymore
+          else # fork worker
+            worker_pids << pid = spawn_worker(idx)
+            @worker_write << "#{PIPE_FORK}#{pid}:#{idx}\n" rescue nil
+          end
+        end
+      end
 
       def spawn_worker(idx)
         @config.run_hooks(:before_worker_fork, idx, @log_writer, @hook_data)

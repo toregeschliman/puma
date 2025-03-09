@@ -23,6 +23,7 @@ module Puma
         @last_checkin = Time.now
         @last_status = {}
         @term = false
+        @mold = false
       end
 
       attr_reader :index, :pid, :phase, :signal, :last_checkin, :last_status, :started_at
@@ -49,6 +50,15 @@ module Puma
 
       def term?
         @term
+      end
+
+      def mold!
+        Process.kill("URG", @pid)
+        @mold = true
+      end
+
+      def mold?
+        @mold
       end
 
       STATUS_PATTERN = /{ "backlog":(?<backlog>\d*), "running":(?<running>\d*), "pool_capacity":(?<pool_capacity>\d*), "max_threads":(?<max_threads>\d*), "requests_count":(?<requests_count>\d*), "busy_threads":(?<busy_threads>\d*) }/
