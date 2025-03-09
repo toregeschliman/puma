@@ -231,7 +231,7 @@ module Puma
       timeout_workers
       wait_workers
       cull_workers
-      promote_mold
+      promote_mold if @options[:fork_worker]
       spawn_workers
 
       if all_workers_booted?
