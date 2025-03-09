@@ -73,7 +73,7 @@ module Puma
       return if missing_workers.zero?
 
       # worker has been terminated previously, see if it's finished
-      if @mold.term?
+      if @mold&.term?
         begin
           # if process is dead and a child process, erase the mold
           @mold = nil if Process.wait(@mold.pid, Process::WNOHANG)
