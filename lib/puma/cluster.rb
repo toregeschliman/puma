@@ -72,28 +72,31 @@ module Puma
       # if there's no workers to replace, just move on by to the next iteration
       return if missing_workers.zero?
 
-      # worker has been terminated previously, see if it's finished
-      if @mold&.term?
-        begin
-          # if process is dead and a child process, erase the mold
-          @mold = nil if Process.wait(@mold.pid, Process::WNOHANG)
-        rescue Errno::ECHILD
+      # handle cases where existing mold might be broken
+      if @mold
+        # worker has been terminated previously, see if it's finished
+        if @mold.term?
           begin
-            Process.kill(0, @mold.pid)
-          rescue Errno::ESRCH, Errno::EPERM
-            # Process is dead but is not a child, go ahead and remove the mold
-            @mold = nil
+            # if process is dead and a child process, erase the mold
+            @mold = nil if Process.wait(@mold.pid, Process::WNOHANG)
+          rescue Errno::ECHILD
+            begin
+              Process.kill(0, @mold.pid)
+            rescue Errno::ESRCH, Errno::EPERM
+              # Process is dead but is not a child, go ahead and remove the mold
+              @mold = nil
+            end
           end
+          # if there's still a @mold at this point, progress to KILL
+          @mold&.term
         end
-        # if there's still a @mold at this point, progress to KILL
-        @mold&.term
-      end
 
-      # if the mold is not pinging, send it a TERM and let it die next iteration
-      if @mold.ping_timeout <= Time.now
-        log "- Mold timed out, terminating it"
-        @mold.term unless mold.term?
-        return
+        # if the mold is not pinging, send it a TERM and let it die next iteration
+        if @mold.ping_timeout <= Time.now
+          log "- Mold timed out, terminating it"
+          @mold.term unless mold.term?
+          return
+        end
       end
 
       # if there's a good mold candidate, promote it
