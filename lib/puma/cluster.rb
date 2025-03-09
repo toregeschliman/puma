@@ -86,7 +86,7 @@ module Puma
           end
         end
         # if there's still a @mold at this point, progress to KILL
-        @mold.term if @mold
+        @mold&.term
       end
 
       # if the mold is not pinging, send it a TERM and let it die next iteration
