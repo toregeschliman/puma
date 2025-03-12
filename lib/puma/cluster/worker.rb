@@ -29,9 +29,7 @@ module Puma
       end
 
       def run
-        title  = "puma: cluster worker #{index}: #{master}"
-        title += " [#{@options[:tag]}]" if @options[:tag] && !@options[:tag].empty?
-        $0 = title
+        set_proc_title
 
         Signal.trap "SIGINT", "IGNORE"
         Signal.trap "SIGCHLD", "DEFAULT"
@@ -72,7 +70,6 @@ module Puma
         fork_worker = @options[:fork_worker] && index == 0
 
         if fork_worker
-          restart_server.clear
           worker_pids = @worker_pids ||= []
           Signal.trap "SIGCHLD" do
             wakeup! if worker_pids.reject! do |p|
@@ -134,6 +131,8 @@ module Puma
         end
 
         if fork_worker && @mold
+          set_proc_title "mold"
+          @config.run_hooks(:before_mold, nil, @log_writer, @hook_data)
           fork_worker_loop
         end
 
@@ -141,14 +140,17 @@ module Puma
         # exiting until any background operations are completed
         @config.run_hooks(:before_worker_shutdown, index, @log_writer, @hook_data)
       ensure
-        if @mold
-          @worker_write << "#{PIPE_MOLD_TERM}\n" rescue nil
-        end
         @worker_write << "#{PIPE_TERM}#{Process.pid}\n" rescue nil
         @worker_write.close
       end
 
       private
+
+      def set_proc_title(role = "worker")
+        title  = "puma: cluster #{role} #{index}: #{master}"
+        title += " [#{@options[:tag]}]" if @options[:tag] && !@options[:tag].empty?
+        $0 = title
+      end
 
       def fork_worker_loop
         forking = true
@@ -159,7 +161,7 @@ module Puma
         end
 
         worker_pids = @worker_pids
-        while !forking && (idx = @fork_pipe.gets)
+        while forking && (idx = @fork_pipe.gets)
           idx = idx.to_i
           if idx == -1 # run before_refork hooks
             @config.run_hooks(:before_refork, nil, @log_writer, @hook_data)

@@ -89,12 +89,11 @@ module Puma
           end
           # if there's still a @mold at this point, progress to KILL
           @mold&.term
-        end
 
         # if the mold is not pinging, send it a TERM and let it die next iteration
-        if @mold.ping_timeout <= Time.now
+        elsif @mold.ping_timeout <= Time.now
           log "- Mold timed out, terminating it"
-          @mold.term unless mold.term?
+          @mold.term unless @mold.term?
           return
         end
       end
@@ -131,7 +130,7 @@ module Puma
       diff.times do
         idx = next_worker_index
 
-        if @options[:fork_worker] && working_mold?
+        if @options[:fork_worker] && working_mold? && idx != 0
           @fork_writer << "#{idx}\n"
           pid = nil
         else
@@ -355,6 +354,7 @@ module Puma
     def fork_worker!
       if (worker = worker_at 0)
         worker.phase += 1
+        @mold&.term
       end
       phased_restart(true)
     end
@@ -541,35 +541,28 @@ module Puma
                 w.pid = pid if w.pid.nil?
               end
 
-              if req == PIPE_PING
-                w = @workers.find { |x| x.pid == pid } || @mold
-                status = result.sub(/^\d+/,'').chomp
-                w.ping!(status)
-                @events.fire(:ping!, w)
-
-                if in_phased_restart && @options[:fork_worker] && workers_not_booted.positive? && w0 = worker_at(0)
-                  w0.ping!(status)
-                  @events.fire(:ping!, w0)
-                end
-
-                if !booted && @workers.none? {|worker| worker.last_status.empty?}
-                  @events.fire_on_booted!
-                  debug_loaded_extensions("Loaded Extensions - master:") if @log_writer.debug?
-                  booted = true
-                end
-              end
-
-              if req == PIPE_MOLD_TERM
-                @mold.term!
-              end
-
-              if w = @workers.find { |x| x.pid == pid }
+              if w = @mold&.pid == pid ? @mold : @workers.find { |x| x.pid == pid }
                 case req
                 when PIPE_BOOT
                   w.boot!
                   log "- Worker #{w.index} (PID: #{pid}) booted in #{w.uptime.round(2)}s, phase: #{w.phase}"
                   @next_check = Time.now
                   workers_not_booted -= 1
+                when PIPE_PING
+                  status = result.sub(/^\d+/,'').chomp
+                  w.ping!(status)
+                  @events.fire(:ping!, w)
+
+                  if in_phased_restart && @options[:fork_worker] && workers_not_booted.positive? && w0 = worker_at(0)
+                    w0.ping!(status)
+                    @events.fire(:ping!, w0)
+                  end
+
+                  if !booted && @workers.none? {|worker| worker.last_status.empty?}
+                    @events.fire_on_booted!
+                    debug_loaded_extensions("Loaded Extensions - master:") if @log_writer.debug?
+                    booted = true
+                  end
                 when PIPE_EXTERNAL_TERM
                   # external term, see worker method, Signal.trap "SIGTERM"
                   w.term!
@@ -634,6 +627,11 @@ module Puma
         rescue Errno::ECHILD
           break
         end
+      end
+
+      if @mold && reaped_children.delete(@mold.pid)
+        @mold.term!
+        @mold = nil
       end
 
       @workers.reject! do |w|
