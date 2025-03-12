@@ -132,7 +132,7 @@ module Puma
 
         if fork_worker && @mold
           set_proc_title "mold"
-          @config.run_hooks(:before_mold, nil, @log_writer, @hook_data)
+          @config.run_hooks(:before_molding, nil, @log_writer, @hook_data)
           fork_worker_loop
         end
 
