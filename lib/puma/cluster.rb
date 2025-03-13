@@ -103,7 +103,7 @@ module Puma
 
       # if there's a good mold candidate, promote it
       # otherwise wait another iteration
-      mold_candidate = @workers.max { |a, b| a.last_status[:requests_count] <=> b.last_status[:requests_count] }
+      mold_candidate = @workers.select { |x| x.phase == @phase }.max { |a, b| a.last_status[:requests_count] <=> b.last_status[:requests_count] }
       return if mold_candidate.nil?
 
       if mold_candidate.booted?
@@ -345,7 +345,7 @@ module Puma
 
     # @version 5.0.0
     def fork_worker!
-      if (worker = worker_at 0)
+      if (worker = @workers.max { |a, b| a.last_status[:requests_count] <=> b.last_status[:requests_count] })
         worker.phase += 1
         @mold&.term
       end
