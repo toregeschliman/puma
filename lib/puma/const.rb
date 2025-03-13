@@ -303,7 +303,6 @@ module Puma
       PIPE_TERM = "t"
       PIPE_PING = "p"
       PIPE_IDLE = "i"
-      PIPE_MOLD_TERM = "m"
     end
   end
 end
