@@ -98,6 +98,9 @@ module Puma
         end
       end
 
+      # if we still have a mold, we're good, no promoting
+      return if @mold
+
       # if there's a good mold candidate, promote it
       # otherwise wait another iteration
       mold_candidate = worker_at(0)
