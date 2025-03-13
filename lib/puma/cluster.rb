@@ -134,7 +134,7 @@ module Puma
       diff.times do
         idx = next_worker_index
 
-        if @options[:fork_worker] && working_mold? && idx != 0
+        if @options[:fork_worker] && working_mold?
           @fork_writer << "#{idx}\n"
           pid = nil
         else
