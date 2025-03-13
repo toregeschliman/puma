@@ -157,16 +157,19 @@ module Puma
 
         Signal.trap("SIGTERM") do
           forking = false
+          @fork_pipe.close rescue nil
           @worker_write << "#{PIPE_EXTERNAL_TERM}#{Process.pid}\n" rescue nil
         end
+
+        @config.run_hooks(:before_refork, nil, @log_writer, @hook_data)
 
         worker_pids = @worker_pids
         while forking && (idx = @fork_pipe.gets)
           idx = idx.to_i
           if idx == -1 # run before_refork hooks
-            @config.run_hooks(:before_refork, nil, @log_writer, @hook_data)
+            # these do nothing anymore
           elsif idx == -2 # run after_refork hooks
-            @config.run_hooks(:after_refork, nil, @log_writer, @hook_data)
+            # this is meaningless with molds
           elsif idx == 0
             # do nothing, we don't restart the server anymore
           else # fork worker
@@ -174,6 +177,10 @@ module Puma
             @worker_write << "#{PIPE_FORK}#{pid}:#{idx}\n" rescue nil
           end
         end
+      rescue IOError
+        # fork_pipe was closed, either parent died or a SIGTERM killed it
+        # parent died is already handled, so only need to handle SIGTERM
+        # but nothing to do in that case either.
       end
 
       def spawn_worker(idx)
