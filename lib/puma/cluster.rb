@@ -107,6 +107,7 @@ module Puma
       return if mold_candidate.nil?
 
       if mold_candidate.booted?
+        log "- Promoting worker 0 to be the mold"
         mold_candidate.mold!
         @workers.delete mold_candidate
         @mold = mold_candidate
