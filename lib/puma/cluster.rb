@@ -103,7 +103,7 @@ module Puma
 
       # if there's a good mold candidate, promote it
       # otherwise wait another iteration
-      mold_candidate = worker_at(0)
+      mold_candidate = @workers.max { |a, b| a.last_status[:requests_count] <=> b.last_status[:requests_count] }
       return if mold_candidate.nil?
 
       if mold_candidate.booted?
@@ -127,9 +127,6 @@ module Puma
       return if diff < 1
 
       master = Process.pid
-      if @options[:fork_worker] && working_mold?
-        @fork_writer << "-1\n"
-      end
 
       diff.times do
         idx = next_worker_index
@@ -143,14 +140,6 @@ module Puma
 
         debug "Spawned worker: #{pid}"
         @workers << WorkerHandle.new(idx, pid, @phase, @options)
-      end
-
-      if @options[:fork_worker] && all_workers_in_phase?
-        @fork_writer << "0\n"
-
-        if worker_at(0).phase > 0
-          @fork_writer << "-2\n"
-        end
       end
     end
 

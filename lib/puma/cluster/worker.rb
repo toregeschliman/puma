@@ -67,7 +67,7 @@ module Puma
 
         restart_server = @restart_server ||= Queue.new << true << false
 
-        fork_worker = @options[:fork_worker] && index == 0
+        fork_worker = @options[:fork_worker]
 
         if fork_worker
           worker_pids = @worker_pids ||= []
