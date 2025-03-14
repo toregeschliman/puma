@@ -1270,8 +1270,8 @@ module Puma
     # @note This is experimental.
     # @note Cluster mode only.
     #
-    def fork_worker(after_requests=1000)
-      @options[:fork_worker] = Integer(after_requests)
+    def fork_worker(after_requests=1000, *addl_requests)
+      @options[:fork_worker] = [after_requests] + addl_requests.map { |r| Integer(r) }
     end
 
     # The number of requests to attempt inline before sending a client back to

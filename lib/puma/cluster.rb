@@ -361,11 +361,12 @@ module Puma
         end
 
         # Auto-fork after the specified number of requests.
-        if (fork_requests = @options[:fork_worker].to_i) > 0
+        if (fork_requests = @options[:fork_worker].first.to_i) > 0
           @events.register(:ping!) do |w|
-            fork_worker! if w.index == 0 &&
-              w.phase == 0 &&
-              w.last_status[:requests_count] >= fork_requests
+            if w.phase == 0 && w.last_status[:requests_count] >= fork_requests
+              fork_worker!
+              @options.fork_worker.shift
+            end
           end
         end
       end
