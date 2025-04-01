@@ -574,7 +574,7 @@ module Puma
         @suicide_pipe.close
         read.close
         @wakeup.close
-        log "Termination data::: state machine: #{@status}, status: #{status}, exception: #{$!.inspect}"
+        log "Termination data::: state machine: #{@status}, status: #{status}, exception: #{$!.inspect}, backtrace: #{$!.backtrace.join('\n')}"
       end
     end
 
