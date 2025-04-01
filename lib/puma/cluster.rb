@@ -5,6 +5,7 @@ require_relative 'util'
 require_relative 'plugin'
 require_relative 'cluster/worker_handle'
 require_relative 'cluster/worker'
+require_relative 'cluster/pipe_protocols'
 
 module Puma
   # This class is instantiated by the `Puma::Launcher` and used
@@ -22,7 +23,9 @@ module Puma
       @workers = []
       @next_check = Time.now
 
-      @phased_restart = false
+      @pending_phased_restart = false
+      @tracked_molds = []
+      @mold = nil
     end
 
     # Returns the list of cluster worker handles.
@@ -67,6 +70,10 @@ module Puma
       @workers.each { |x| x.hup }
     end
 
+    def active_mold?
+      @mold && @mold.ping_timeout > Time.now
+    end
+
     def spawn_workers
       diff = @options[:workers] - @workers.size
       return if diff < 1
@@ -82,6 +89,8 @@ module Puma
         if @options[:fork_worker] && idx != 0
           @fork_writer << "#{idx}\n"
           pid = nil
+        elsif @options[:mold_worker] && active_mold?
+          PipeProtocols::Fork.write_to(@fork_writer, value: idx)
         else
           pid = spawn_worker(idx, master)
         end
@@ -179,7 +188,8 @@ module Puma
       timeout_workers
       wait_workers
       cull_workers
-      spawn_workers
+      promote_mold if @options[:mold_worker]
+      spawn_workers unless @pending_phased_restart
 
       if all_workers_booted?
         # If we're running at proper capacity, check to see if
@@ -216,7 +226,7 @@ module Puma
       @fork_writer.close
 
       pipes = { check_pipe: @check_pipe, worker_write: @worker_write }
-      if @options[:fork_worker]
+      if @options[:fork_worker] || @options[:mold_worker]
         pipes[:fork_pipe] = @fork_pipe
         pipes[:wakeup] = @wakeup
       end
@@ -238,7 +248,7 @@ module Puma
     def phased_restart(refork = false)
       return false if @options[:preload_app] && !refork
 
-      @phased_restart = refork ? :refork : true
+      @pending_phased_restart = refork ? :refork : true
       wakeup!
 
       true
@@ -322,6 +332,24 @@ module Puma
               w.last_status[:requests_count] >= fork_requests
           end
         end
+
+      end
+      if @options[:mold_worker]
+        current_interval_index = 0
+        @events.register(:ping!) do |w|
+          # if there's a phased_restart under way don't step on its toes
+          next unless all_workers_in_phase?
+
+          next_request_interval = @options[:mold_worker][current_interval_index]
+          next unless next_request_interval && w.last_status[:requests_count] >= next_request_interval
+          # if @phase has already been incremented, we're already reforking;
+          # wait before kicking off yet another phased restart
+
+          @mold&.term
+          w.phase = @phase + 1 # cluster phase will catch up next loop; we want this one to be picked as a mold
+          current_interval_index += 1
+          phased_restart(true)
+        end
       end
 
       Signal.trap "SIGCHLD" do
@@ -378,7 +406,7 @@ module Puma
 
         before = Thread.list.reject(&fork_safe)
 
-        log "*     Restarts: (\u2714) hot (\u2716) phased (#{@options[:fork_worker] ? "\u2714" : "\u2716"}) refork"
+        log "*     Restarts: (\u2714) hot (\u2716) phased (#{@options[:fork_worker] ? "\u2714" : "\u2716"}) refork (#{@options[:mold_worker] ? "\u2714" : "\u2716"}) mold"
         log "* Preloading application"
         load_and_bind
 
@@ -396,7 +424,7 @@ module Puma
           end
         end
       else
-        log "*     Restarts: (\u2714) hot (\u2714) phased (#{@options[:fork_worker] ? "\u2714" : "\u2716"}) refork"
+        log "*     Restarts: (\u2714) hot (\u2714) phased (#{@options[:fork_worker] ? "\u2714" : "\u2716"}) refork (#{@options[:mold_worker] ? "\u2714" : "\u2716"}) mold"
 
         unless @config.app_configured?
           error "No application configured, nothing to run"
@@ -457,11 +485,14 @@ module Puma
               break
             end
 
-            if @phased_restart
-              start_phased_restart(@phased_restart == :refork)
+            # if running with mold_worker, delay phased restart until a mold is promoted
+            delay_phased_restart = @options[:mold_worker] && !active_mold?
 
-              in_phased_restart = @phased_restart
-              @phased_restart = false
+            if @pending_phased_restart && !delay_phased_restart
+              start_phased_restart(@pending_phased_restart == :refork)
+
+              in_phased_restart = @pending_phased_restart
+              @pending_phased_restart = false
 
               workers_not_booted = @options[:workers]
               # worker 0 is not restarted on refork
@@ -488,7 +519,7 @@ module Puma
                 w.pid = pid if w.pid.nil?
               end
 
-              if w = @workers.find { |x| x.pid == pid }
+              if w = @tracked_molds.find { |x| x.pid == pid } || @workers.find { |x| x.pid == pid }
                 case req
                 when PIPE_BOOT
                   w.boot!
@@ -578,27 +609,25 @@ module Puma
 
       @workers.reject! do |w|
         next false if w.pid.nil?
-        begin
-          # We may need to check the PID individually because:
-          # 1. From Ruby versions 2.6 to 3.2, `Process.detach` can prevent or delay
-          #    `Process.wait2(-1)` from detecting a terminated process: https://bugs.ruby-lang.org/issues/19837.
-          # 2. When `fork_worker` is enabled, some worker may not be direct children,
-          #    but grand children.  Because of this they won't be reaped by `Process.wait2(-1)`.
-          if reaped_children.delete(w.pid) || Process.wait(w.pid, Process::WNOHANG)
-            true
-          else
-            w.term if w.term?
-            nil
-          end
-        rescue Errno::ECHILD
-          begin
-            Process.kill(0, w.pid)
-            # child still alive but has another parent (e.g., using fork_worker)
-            w.term if w.term?
-            false
-          rescue Errno::ESRCH, Errno::EPERM
-            true # child is already terminated
-          end
+        # We may need to check the PID individually because:
+        # 1. From Ruby versions 2.6 to 3.2, `Process.detach` can prevent or delay
+        #    `Process.wait2(-1)` from detecting a terminated process: https://bugs.ruby-lang.org/issues/19837.
+        # 2. When `fork_worker` is enabled, some worker may not be direct children,
+        #    but grand children.  Because of this they won't be reaped by `Process.wait2(-1)`.
+        if reaped_children.delete(w.pid) || check_process_terminated(w.pid)
+          true
+        else
+          w.term if w.term?
+          nil
+        end
+      end
+
+      @tracked_molds.reject! do |m|
+        if reaped_children.delete(m.pid) || check_process_terminated(m.pid)
+          true
+        else
+          m.term if m.term?
+          nil
         end
       end
 
@@ -606,6 +635,50 @@ module Puma
       reaped_children.each do |pid, status|
         log "! reaped unknown child process pid=#{pid} status=#{status}"
       end
+    end
+
+    def check_process_terminated(pid)
+      Process.wait(pid, Process::WNOHANG)
+    rescue Errno::ECHILD
+      begin
+        Process.kill(0, pid)
+      rescue Errno::ESRCH, Errno::EPERM
+        return true
+      else
+        false
+      end
+    end
+
+    def promote_mold
+      missing_workers = @options[:workers] - @workers.size
+      return if missing_workers <= 0
+
+      # if the active mold got reaped, remove it here
+      @mold = nil unless @tracked_molds.include?(@mold)
+
+      # if the mold is not pinging, send it a TERM and let it die next iteration
+      if @mold && @mold.ping_timeout <= Time.now
+        log "- Mold timed out, terminating"
+        @mold.term unless @mold.term?
+        @mold = nil
+      end
+
+      # if you still have a good mold, return
+      return if @mold
+
+      # if we make it here, we have no mold and need to promote one
+      # pick the worker with the highest request count that is in
+      # the correct phase
+      workers_in_phase = @workers.select { |w| w.phase == @phase }
+      workers_in_phase = @workers if workers_in_phase.empty?
+      mold_candidate = workers_in_phase.max { |a, b| a.last_status[:requests_count].to_i <=> b.last_status[:requests_count].to_i }
+      return if mold_candidate.nil? || !mold_candidate.booted?
+
+      log "Promoting worker #{mold_candidate.index} to mold"
+      mold_candidate.mold!
+      @workers.delete mold_candidate
+      @tracked_molds << mold_candidate
+      @mold = mold_candidate
     end
 
     # @version 5.0.0
