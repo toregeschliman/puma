@@ -574,7 +574,7 @@ module Puma
         @suicide_pipe.close
         read.close
         @wakeup.close
-        log "Termination data::: status: #{status}, exception: #{$!.inspect}" unless status == :stop
+        log "Termination data::: state machine: #{@status}, status: #{status}, exception: #{$!.inspect}" unless @status == :stop
       end
     end
 
