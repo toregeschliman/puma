@@ -163,8 +163,6 @@ module Puma
               @worker_write << "#{PIPE_FORK}#{pid}:#{idx}\n"
               log "Forked worker #{idx} with pid #{pid}"
             end
-          rescue StandardError => e
-            log "Fork pipe terminated with exception: #{e.inspect}"
           end
 
           @config.run_hooks(:on_mold_shutdown, index, @log_writer, @hook_data)
