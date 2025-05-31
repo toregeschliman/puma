@@ -94,7 +94,7 @@ module Puma
               elsif idx == 0 # restart server
                 restart_server << true << false
               else # fork worker
-                worker_pids << pid = spawn_worker(idx)
+                worker_pids << (pid = spawn_worker(idx))
                 @worker_write << "#{PIPE_FORK}#{pid}:#{idx}\n" rescue nil
               end
             end
@@ -159,7 +159,7 @@ module Puma
 
           begin
             while (idx = PipeProtocols::Fork.read_from(@fork_pipe))
-              worker_pids << pid = spawn_worker(idx)
+              worker_pids << (pid = spawn_worker(idx))
               @worker_write << "#{PIPE_FORK}#{pid}:#{idx}\n"
               log "Forked worker #{idx} with pid #{pid}"
             end
@@ -172,22 +172,19 @@ module Puma
         @config.run_hooks(:before_worker_shutdown, index, @log_writer, @hook_data) unless @mold
       ensure
         @worker_write << "#{PIPE_TERM}#{Process.pid}\n"
+        @worker_write.close
       end
 
       private
 
       def make_sure_pinging(server)
         # if the stat thread died, join and replace it
-        if @thread && !@thread.alive?
-          begin
-            @thread.join rescue nil # just ignore exceptions here
-            @thread = nil
-          rescue => e
-            log "While joining stat thread rescued #{e.class}: #{e.message}"
-          end
+        if @stat_thread && !@stat_thread.alive?
+          @stat_thread.join rescue nil # just ignore exceptions here
+          @stat_thread = nil
         end
 
-        @thread ||= Thread.new(@worker_write) do |io|
+        @stat_thread ||= Thread.new(@worker_write) do |io|
           Puma.set_thread_name "stat pld"
           base_payload = "#{PIPE_PING}#{Process.pid}"
 

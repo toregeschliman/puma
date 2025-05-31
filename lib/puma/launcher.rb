@@ -179,10 +179,10 @@ module Puma
 
     # Begin a refork if supported
     def refork
-      if clustered? && @runner.respond_to?(:fork_worker!) && @options[:fork_worker]
+      if clustered? && @options[:fork_worker] && @runner.respond_to?(:fork_worker!)
         @runner.fork_worker!
         true
-      elsif clustered? && @runner.respond_to?(:mold_and_refork!) && @options[:mold_worker]
+      elsif clustered? && @options[:mold_worker] && @runner.respond_to?(:mold_and_refork!)
         @runner.mold_and_refork!
         true
       else

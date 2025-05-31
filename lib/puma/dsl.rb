@@ -1267,6 +1267,7 @@ module Puma
     # @note Cluster mode only.
     #
     def fork_worker(after_requests=1000)
+      return if warn_on_incompatible_option(:mold_worker, :fork_worker)
       @options[:fork_worker] = Integer(after_requests)
     end
 
@@ -1282,6 +1283,7 @@ module Puma
     # and multiple intervals can be specified (as absolute request count thresholds) to allow for improved
     # performance over time.
     def mold_worker(mold_at=1000, *additional_molds)
+      return if warn_on_incompatible_option(:fork_worker, :mold_worker)
       @options[:mold_worker] = [Integer(mold_at)] + additional_molds.map { |m| Integer(m) }
     end
 
@@ -1464,6 +1466,18 @@ module Puma
 
         LogWriter.stdio.log(log_string)
       end
+    end
+
+    def warn_on_incompatible_option(first_option, conflicting_additional_option)
+      return false unless @options[first_option]
+
+      log_string =
+        "Warning: `#{first_option}` has already been set and is incompatible " \
+        "with the `#{conflicting_additional_option}` option, " \
+        "ignoring the `#{conflicting_additional_option}` option for now."
+
+      LogWriter.stdio.log(log_string)
+      true
     end
   end
 end

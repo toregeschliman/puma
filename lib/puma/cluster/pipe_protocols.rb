@@ -12,7 +12,7 @@ module Puma
 
         def self.read_from(pipe)
           pipe.read(PAYLOAD_SIZE, @read_buffer)&.unpack1(PAYLOAD_STRING)
-        rescue EOFError
+        rescue IOError
           nil
         ensure
           @read_buffer.clear
