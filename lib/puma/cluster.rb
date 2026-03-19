@@ -321,9 +321,8 @@ module Puma
       workers.max { |a, b| a.last_status[:requests_count].to_i <=> b.last_status[:requests_count].to_i }
     end
 
-    def mold_and_refork!(mold_candidate = most_experienced_worker)
+    def mold_and_refork!
       @mold&.term
-      mold_candidate.phase = @phase + 1 # cluster phase will catch up next loop; we want this one to be picked as a mold
       phased_restart(:refork)
     end
 
@@ -369,7 +368,7 @@ module Puma
           # wait before kicking off yet another phased restart
 
           current_interval_index += 1
-          mold_and_refork!(w)
+          mold_and_refork!
         end
       end
 
