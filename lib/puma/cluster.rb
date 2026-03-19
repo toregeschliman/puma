@@ -247,7 +247,7 @@ module Puma
     end
 
     def phased_restart(refork = false)
-      return false if @options[:preload_app] && !refork
+      return false if @options[:preload_app] && !refork && !@options[:mold_worker]
 
       @pending_phased_restart = refork ? :refork : :restart
       wakeup!
