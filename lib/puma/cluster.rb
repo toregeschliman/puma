@@ -49,8 +49,7 @@ module Puma
     end
 
     def start_phased_restart(refork = false)
-      @events.fire_on_restart!
-
+      @events.fire_before_restart!
       @phase += 1
       if refork
         log "- Starting worker refork, phase: #{@phase}"
@@ -98,7 +97,7 @@ module Puma
         end
 
         debug "Spawned worker: #{pid}"
-        @workers << WorkerHandle.new(idx, pid, @phase, @options)
+        @workers.insert(idx, WorkerHandle.new(idx, pid, @phase, @options))
       end
 
       if @options[:fork_worker] && all_workers_in_phase?
@@ -198,7 +197,7 @@ module Puma
         # we need to phase any workers out (which will restart
         # in the right phase).
         #
-        w = @workers.find { |x| x.phase != @phase }
+        w = @workers.find { |x| x.phase < @phase }
 
         if w
           if in_phased_restart == :refork
@@ -233,12 +232,11 @@ module Puma
         pipes[:wakeup] = @wakeup
       end
 
-      server = start_server if preload?
       new_worker = Worker.new index: index,
                               master: master,
                               launcher: @launcher,
                               pipes: pipes,
-                              server: server
+                              app: (app if preload?)
       new_worker.run
     end
 
@@ -250,7 +248,7 @@ module Puma
     def phased_restart(refork = false)
       return false if @options[:preload_app] && !refork
 
-      @pending_phased_restart = refork ? :refork : :restart
+      @pending_phased_restart = refork ? :refork : true
       wakeup!
 
       true
@@ -280,11 +278,14 @@ module Puma
     end
 
     # Inside of a child process, this will return all zeroes, as @workers is only populated in
-    # the master process.
+    # the master process.  Calling this also resets stat 'max' values to zero.
     # @!attribute [r] stats
+    # @return [Hash]
+
     def stats
       old_worker_count = @workers.count { |w| w.phase != @phase }
       worker_status = @workers.map do |w|
+        w.reset_max
         {
           started_at: utc_iso8601(w.started_at),
           pid: w.pid,
@@ -295,7 +296,6 @@ module Puma
           last_status: w.last_status,
         }
       end
-
       {
         started_at: utc_iso8601(@started_at),
         workers: @workers.size,
@@ -398,7 +398,7 @@ module Puma
 
           stop_workers
           stop
-          @events.fire_on_stopped!
+          @events.fire_after_stopped!
           raise(SignalException, "SIGTERM") if @options[:raise_exception_on_sigterm]
           exit 0 # Clean exit, workers were stopped
         end
@@ -415,12 +415,8 @@ module Puma
 
       if preload?
         # Threads explicitly marked as fork safe will be ignored. Used in Rails,
-        # but may be used by anyone. Note that we need to explicit
-        # Process::Waiter check here because there's a bug in Ruby 2.6 and below
-        # where calling thread_variable_get on a Process::Waiter will segfault.
-        # We can drop that clause once those versions of Ruby are no longer
-        # supported.
-        fork_safe = ->(t) { !t.is_a?(Process::Waiter) && t.thread_variable_get(:fork_safe) }
+        # but may be used by anyone.
+        fork_safe = ->(t) { t.thread_variable_get(:fork_safe) }
 
         before = Thread.list.reject(&fork_safe)
 
@@ -469,6 +465,7 @@ module Puma
 
       log "Use Ctrl-C to stop"
 
+      warn_ruby_mn_threads
       single_worker_warning
 
       redirect_io
@@ -566,7 +563,7 @@ module Puma
                   end
 
                   if !booted && @workers.none? {|worker| worker.last_status.empty?}
-                    @events.fire_on_booted!
+                    @events.fire_after_booted!
                     debug_loaded_extensions("Loaded Extensions - master:") if @log_writer.debug?
                     booted = true
                   end
@@ -583,7 +580,7 @@ module Puma
             end
 
             if in_phased_restart && workers_not_booted.zero?
-              @events.fire_on_booted!
+              @events.fire_after_booted!
               debug_loaded_extensions("Loaded Extensions - master:") if @log_writer.debug?
               in_phased_restart = false
             end
@@ -638,7 +635,9 @@ module Puma
         #    `Process.wait2(-1)` from detecting a terminated process: https://bugs.ruby-lang.org/issues/19837.
         # 2. When `fork_worker` is enabled, some worker may not be direct children,
         #    but grand children.  Because of this they won't be reaped by `Process.wait2(-1)`.
-        if reaped_children.delete(w.pid) || check_process_terminated(w.pid)
+        if (status = reaped_children.delete(w.pid) || Process.wait2(w.pid, Process::WNOHANG)&.last)
+          w.process_status = status
+          @config.run_hooks(:after_worker_shutdown, w, @log_writer)
           true
         else
           w.term if w.term?
