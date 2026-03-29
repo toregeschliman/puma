@@ -92,6 +92,7 @@ module Puma
           pid = nil
         elsif @options[:mold_worker] && active_mold?
           PipeProtocols::Fork.write_to(@fork_writer, value: idx)
+          pid = nil
         else
           pid = spawn_worker(idx, master)
         end
@@ -343,7 +344,6 @@ module Puma
               w.last_status[:requests_count] >= fork_requests
           end
         end
-
       end
       if @options[:mold_worker]
         Signal.trap "SIGURG" do
@@ -365,9 +365,6 @@ module Puma
 
           next_request_interval = @options[:mold_worker][current_interval_index]
           next unless next_request_interval && w.last_status[:requests_count] >= next_request_interval
-          # if @phase has already been incremented, we're already reforking;
-          # wait before kicking off yet another phased restart
-
           current_interval_index += 1
           mold_and_refork!(w)
         end
@@ -585,7 +582,7 @@ module Puma
               end
             end
 
-            if (in_phased_restart) && workers_not_booted.zero?
+            if in_phased_restart && workers_not_booted.zero?
               @events.fire_on_booted!
               debug_loaded_extensions("Loaded Extensions - master:") if @log_writer.debug?
               in_phased_restart = false
@@ -685,7 +682,7 @@ module Puma
 
       # if the mold is not pinging, send it a TERM and let it die next iteration
       if @mold && @mold.ping_timeout <= Time.now
-        log "- Mold timed out, terminating"
+        log "- Mold (PID: #{@mold.pid}) timed out, terminating"
         @mold.term unless @mold.term?
         @mold = nil
       end
@@ -701,7 +698,7 @@ module Puma
       mold_candidate = most_experienced_worker(workers_in_phase)
       return if mold_candidate.nil? || !mold_candidate.booted?
 
-      log "Promoting worker #{mold_candidate.index} to mold"
+      log "Promoting worker #{mold_candidate.index} (PID: #{mold_candidate.pid}) to mold after #{mold_candidate.last_status[:requests_count].to_i} requests"
       mold_candidate.mold!
       @workers.delete mold_candidate
       @tracked_molds << mold_candidate
