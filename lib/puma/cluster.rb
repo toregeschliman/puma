@@ -248,7 +248,7 @@ module Puma
     def phased_restart(refork = false)
       return false if @options[:preload_app] && !refork
 
-      @pending_phased_restart = refork ? :refork : true
+      @pending_phased_restart = refork ? :refork : :restart
       wakeup!
 
       true
@@ -325,7 +325,7 @@ module Puma
     def mold_and_refork!(mold_candidate = most_experienced_worker)
       @mold&.term
       mold_candidate.phase = @phase + 1 # cluster phase will catch up next loop; we want this one to be picked as a mold
-      phased_restart(:refork)
+      phased_restart(true)
     end
 
     # We do this in a separate method to keep the lambda scope
@@ -354,7 +354,7 @@ module Puma
           # stop any existing mold
           @mold&.term
           # begin a full restart
-          phased_restart
+          phased_restart(true)
           # reset the mold_worker intervals
           current_interval_index = 0
           wakeup!
@@ -505,7 +505,7 @@ module Puma
             # optimization: if running with mold_worker and triggering a phased refork (URG),
             # if you don't have an active mold, defer until promote_mold runs and a mold has a
             # chance to start so that you get the newest generation
-            delay_phased_restart = @options[:mold_worker] && !active_mold? && @pending_phased_restart != :restart
+            delay_phased_restart = @options[:mold_worker] && !active_mold? && @pending_phased_restart == :restart
 
             if @pending_phased_restart && !delay_phased_restart
               start_phased_restart(@pending_phased_restart == :refork)
@@ -635,7 +635,7 @@ module Puma
         #    `Process.wait2(-1)` from detecting a terminated process: https://bugs.ruby-lang.org/issues/19837.
         # 2. When `fork_worker` is enabled, some worker may not be direct children,
         #    but grand children.  Because of this they won't be reaped by `Process.wait2(-1)`.
-        if (status = reaped_children.delete(w.pid) || Process.wait2(w.pid, Process::WNOHANG)&.last)
+        if (status = reaped_children.delete(w.pid) || check_process_terminated(w.pid))
           w.process_status = status
           @config.run_hooks(:after_worker_shutdown, w, @log_writer)
           true

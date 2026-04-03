@@ -107,7 +107,7 @@ module Puma
             @mold = true
             restart_server.clear
             restart_server << false
-            server.begin_restart(true)
+            @server.begin_restart(true)
           end
         end
 
@@ -132,25 +132,8 @@ module Puma
             debug_loaded_extensions "Loaded Extensions - worker 0:"
           end
 
-          make_sure_pinging(server)
+          make_sure_pinging(@server)
 
-            while true
-              begin
-                payload = base_payload.dup
-
-                hsh = @server.stats
-                hsh.each do |k, v|
-                  payload << %Q! "#{k}":#{v || 0},!
-                end
-                # sub call properly adds 'closing' string
-                io << payload.sub(/,\z/, " }\n")
-                @server.reset_max
-              rescue IOError
-                break
-              end
-              sleep @options[:worker_check_interval]
-            end
-          end
           server_thread.join
         end
 
@@ -171,7 +154,7 @@ module Puma
 
           @config.run_hooks(:on_mold_promotion, index, @log_writer, @hook_data)
 
-          make_sure_pinging(server)
+          make_sure_pinging(@server)
           wakeup!
 
           begin
@@ -207,16 +190,17 @@ module Puma
 
           while true
             begin
-              b = server.backlog || 0
-              r = server.running || 0
-              t = server.pool_capacity || 0
-              m = server.max_threads || 0
-              rc = server.requests_count || 0
-              bt = server.busy_threads || 0
-              payload = %Q!#{base_payload}{ "backlog":#{b}, "running":#{r}, "pool_capacity":#{t}, "max_threads":#{m}, "requests_count":#{rc}, "busy_threads":#{bt} }\n!
-              io << payload
+              payload = base_payload.dup
+
+              hsh = @server.stats
+              hsh.each do |k, v|
+                payload << %Q! "#{k}":#{v || 0},!
+              end
+              # sub call properly adds 'closing' string
+              puts "[#{Process.pid}] payload: #{payload}"
+              io << payload.sub(/,\z/, " }\n")
+              @server.reset_max
             rescue IOError
-              Puma::Util.purge_interrupt_queue
               break
             end
             sleep @options[:worker_check_interval]
@@ -248,8 +232,7 @@ module Puma
           new_worker = Worker.new index: idx,
                                   master: master,
                                   launcher: @launcher,
-                                  pipes: { check_pipe: @check_pipe,
-                                           worker_write: @worker_write },
+                                  pipes:,
                                   app: @app
           new_worker.run
         end

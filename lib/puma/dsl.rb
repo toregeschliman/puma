@@ -1415,16 +1415,12 @@ module Puma
     # This code can do things like making sure large shareable objects have been initialized
     # or connections are closed.
     def on_mold_promotion(key = nil, &block)
-      warn_if_in_single_mode('on_mold_promotion')
-
-      process_hook :on_mold_promotion, key, block, 'on_mold_promotion'
+      process_hook :on_mold_promotion, key, block, cluster_only: true
     end
 
     # Code to run immediately before a mold process shuts down.
     def on_mold_shutdown(key = nil, &block)
-      warn_if_in_single_mode('on_mold_shutdown')
-
-      process_hook :on_mold_shutdown, key, block, 'on_mold_shutdown'
+      process_hook :on_mold_shutdown, key, block, cluster_only: true
     end
 
     # The number of requests to attempt inline before sending a client back to
