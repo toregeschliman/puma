@@ -232,7 +232,7 @@ module Puma
           new_worker = Worker.new index: idx,
                                   master: master,
                                   launcher: @launcher,
-                                  pipes:,
+                                  pipes: pipes,
                                   app: @app
           new_worker.run
         end
