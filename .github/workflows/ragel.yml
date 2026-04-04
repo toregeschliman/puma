@@ -1,6 +1,17 @@
 name: ragel
 
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'ext/**'
+      - '.github/workflows/ragel.yml'
+  pull_request:
+    paths:
+      - 'ext/**'
+      - '.github/workflows/ragel.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read # to fetch code (actions/checkout)
@@ -79,7 +90,7 @@ jobs:
           }
 
       - name: save ragel generated files on fail
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         if: ${{ failure() }}
         with:
           name: ${{ matrix.os }}-ragel-generated-files
