@@ -16,7 +16,7 @@ module Puma
     class Worker < Puma::Runner # :nodoc:
       attr_reader :index, :master
 
-      def initialize(index:, master:, launcher:, pipes:, server: nil)
+      def initialize(index:, master:, launcher:, pipes:, app: nil)
         super(launcher)
 
         @index = index
@@ -25,7 +25,8 @@ module Puma
         @worker_write = pipes[:worker_write]
         @fork_pipe = pipes[:fork_pipe]
         @wakeup = pipes[:wakeup]
-        @server = server
+        @app = app
+        @server = nil
         @hook_data = {}
         @mold = false
       end
@@ -58,7 +59,7 @@ module Puma
         @config.run_hooks(:before_worker_boot, index, @log_writer, @hook_data)
 
         begin
-        server = @server ||= start_server
+          @server = start_server
         rescue Exception => e
           log "! Unable to start worker"
           log e
@@ -86,7 +87,7 @@ module Puma
               if idx == -1 # stop server
                 if restart_server.length > 0
                   restart_server.clear
-                  server.begin_restart(true)
+                  @server.begin_restart(true)
                   @config.run_hooks(:before_refork, nil, @log_writer, @hook_data)
                 end
               elsif idx == -2 # refork cycle is done
@@ -94,7 +95,7 @@ module Puma
               elsif idx == 0 # restart server
                 restart_server << true << false
               else # fork worker
-                worker_pids << pid = spawn_worker(idx)
+                worker_pids << (pid = spawn_worker(idx))
                 @worker_write << "#{PIPE_FORK}#{pid}:#{idx}\n" rescue nil
               end
             end
@@ -106,33 +107,32 @@ module Puma
             @mold = true
             restart_server.clear
             restart_server << false
-            server.begin_restart(true)
+            @server.begin_restart(true)
           end
         end
 
         Signal.trap "SIGTERM" do
           @worker_write << "#{PIPE_EXTERNAL_TERM}#{Process.pid}\n" rescue nil
           restart_server.clear
-          server.stop
+          @server.stop
           restart_server << false
         end
 
         begin
           @worker_write << "#{PIPE_BOOT}#{Process.pid}:#{index}\n"
         rescue SystemCallError, IOError
-          Puma::Util.purge_interrupt_queue
           STDERR.puts "Master seems to have exited, exiting."
           return
         end
 
         while restart_server.pop
-          server_thread = server.run
+          server_thread = @server.run
 
           if @log_writer.debug? && index == 0
             debug_loaded_extensions "Loaded Extensions - worker 0:"
           end
 
-          make_sure_pinging(server)
+          make_sure_pinging(@server)
 
           server_thread.join
         end
@@ -154,17 +154,15 @@ module Puma
 
           @config.run_hooks(:on_mold_promotion, index, @log_writer, @hook_data)
 
-          make_sure_pinging(server)
+          make_sure_pinging(@server)
           wakeup!
 
           begin
             while (idx = PipeProtocols::Fork.read_from(@fork_pipe))
-              worker_pids << pid = spawn_worker(idx)
+              worker_pids << (pid = spawn_worker(idx))
               @worker_write << "#{PIPE_FORK}#{pid}:#{idx}\n"
               log "Forked worker #{idx} with pid #{pid}"
             end
-          rescue StandardError => e
-            log "Fork pipe terminated with exception: #{e.inspect}"
           end
 
           @config.run_hooks(:on_mold_shutdown, index, @log_writer, @hook_data)
@@ -174,37 +172,34 @@ module Puma
         @config.run_hooks(:before_worker_shutdown, index, @log_writer, @hook_data) unless @mold
       ensure
         @worker_write << "#{PIPE_TERM}#{Process.pid}\n"
+        @worker_write.close
       end
 
       private
 
       def make_sure_pinging(server)
         # if the stat thread died, join and replace it
-        if @thread && !@thread.alive?
-          begin
-            @thread.join rescue nil # just ignore exceptions here
-            @thread = nil
-          rescue => e
-            log "While joining stat thread rescued #{e.class}: #{e.message}"
-          end
+        if @stat_thread && !@stat_thread.alive?
+          @stat_thread.join rescue nil # just ignore exceptions here
+          @stat_thread = nil
         end
 
-        @thread ||= Thread.new(@worker_write) do |io|
+        @stat_thread ||= Thread.new(@worker_write) do |io|
           Puma.set_thread_name "stat pld"
           base_payload = "#{PIPE_PING}#{Process.pid}"
 
           while true
             begin
-              b = server.backlog || 0
-              r = server.running || 0
-              t = server.pool_capacity || 0
-              m = server.max_threads || 0
-              rc = server.requests_count || 0
-              bt = server.busy_threads || 0
-              payload = %Q!#{base_payload}{ "backlog":#{b}, "running":#{r}, "pool_capacity":#{t}, "max_threads":#{m}, "requests_count":#{rc}, "busy_threads":#{bt} }\n!
-              io << payload
+              payload = base_payload.dup
+
+              hsh = @server.stats
+              hsh.each do |k, v|
+                payload << %Q! "#{k}":#{v || 0},!
+              end
+              # sub call properly adds 'closing' string
+              io << payload.sub(/,\z/, " }\n")
+              @server.reset_max
             rescue IOError
-              Puma::Util.purge_interrupt_queue
               break
             end
             sleep @options[:worker_check_interval]
@@ -237,7 +232,7 @@ module Puma
                                   master: master,
                                   launcher: @launcher,
                                   pipes: pipes,
-                                  server: @server
+                                  app: @app
           new_worker.run
         end
 

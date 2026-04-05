@@ -39,10 +39,8 @@ module Puma
       @control_url = nil
       @control_options = {}
 
-      setup_options env
-
       begin
-        @parser.parse! @argv
+        setup_options env
 
         if file = @argv.shift
           @conf.configure do |user_config, file_config|
@@ -93,7 +91,7 @@ module Puma
     #
 
     def setup_options(env = ENV)
-      @conf = Configuration.new({}, {events: @events}, env) do |user_config, file_config|
+      @conf = Configuration.new({}, { events: @events }, env) do |user_config, file_config|
         @parser = OptionParser.new do |o|
           o.on "-b", "--bind URI", "URI to bind to (tcp://, unix://, ssl://)" do |arg|
             user_config.bind arg
@@ -156,7 +154,7 @@ module Puma
 
           o.on "-p", "--port PORT", "Define the TCP port to bind to",
             "Use -b for more advanced options" do |arg|
-            user_config.bind "tcp://#{Configuration::DEFAULTS[:tcp_host]}:#{arg}"
+            user_config.port arg, Configuration.default_tcp_host
           end
 
           o.on "--pidfile PATH", "Use PATH as a pidfile" do |arg|
@@ -246,7 +244,7 @@ module Puma
             $stdout.puts o
             exit 0
           end
-        end
+        end.parse! @argv
       end
     end
   end

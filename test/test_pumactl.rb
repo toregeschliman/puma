@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require_relative "helper"
 require_relative "helpers/ssl"
 
@@ -159,7 +161,7 @@ class TestPumaControlCli < PumaTest
   end
 
   def test_control_url_and_status
-    host = "127.0.0.1"
+    host = "localhost"
     port = UniquePort.call
     url = "tcp://#{host}:#{port}/"
 

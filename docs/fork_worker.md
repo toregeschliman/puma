@@ -24,13 +24,13 @@ The `fork_worker` option allows your application to be initialized only once for
 
 ### Usage Considerations
 
-- `fork_worker` introduces new `on_refork` and `after_refork` configuration hooks. Note the following:
-    - When initially forking the parent process to the worker 0 child, `before_fork` will trigger on the parent process and `on_worker_boot` will trigger on the worker 0 child as normal.
-    - When forking the worker 0 child to grandchild workers, `on_refork` and `after_refork` will trigger on the worker 0 child, and `on_worker_boot` will trigger on each grandchild worker.
+- `fork_worker` introduces new `before_refork` and `after_refork` configuration hooks. Note the following:
+    - When initially forking the parent process to the worker 0 child, `before_fork` will trigger on the parent process and `before_worker_boot` will trigger on the worker 0 child as normal.
+    - When forking the worker 0 child to grandchild workers, `before_refork` and `after_refork` will trigger on the worker 0 child, and `before_worker_boot` will trigger on each grandchild worker.
     - For clarity, `before_fork` does not trigger on worker 0, and `after_refork` does not trigger on the grandchild.
 - As a general migration guide:
-    - Copy any logic within your existing `before_fork` hook to the `on_refork` hook.
-    - Consider to copy logic from your `on_worker_boot` hook to the `after_refork` hook, if it is needed to reset the state of worker 0 after it forks.
+    - Copy any logic within your existing `before_fork` hook to the `before_refork` hook.
+    - Consider to copy logic from your `before_worker_boot` hook to the `after_refork` hook, if it is needed to reset the state of worker 0 after it forks.
 
 ### Limitations
 
@@ -42,17 +42,19 @@ The `fork_worker` option allows your application to be initialized only once for
 
 ### PR_SET_CHILD_SUBREAPER
 
-Where available from the OS (Linux ), if you are using `fork_worker` Puma will mark the cluster parent automatically as a "child subreaper", so that in case worker-0 terminates, its child processes end up reparented to the cluster parent rather than orphaned. 
+Where available from the OS (Linux 3.4+), if you are using `fork_worker` Puma will mark the cluster parent automatically as a "child subreaper", so that in case worker-0 terminates, its child processes end up reparented to the cluster parent rather than orphaned. 
 
 ### Mold-Worker Cluster Mode [Experimental] [Alternative]
 
-`mold_worker` is similar in concept to `fork_worker` except that before a worker-0 process reforks, it permanently stops handling requests and converts to a "mold" process, effectively an idle worker template. This provides some stability advantages over the standard fork_worker mode, as you no longer have to coordinate reforks with a request server stopping and restarting, and are at much lower risk of losing the reforking process to termination via OOM, timeouts, or other external mechanisms.
+`mold_worker` is similar in concept to `fork_worker` except that before a worker process reforks, it permanently stops handling requests and converts to a "mold" process, effectively an idle worker template. This provides some stability advantages over the standard fork_worker mode, as you no longer have to coordinate reforks with a request server stopping and restarting, and are at much lower risk of losing the reforking process to termination via OOM, timeouts, or other external mechanisms.
 
 ### Mold-Worker Important Differences
 
-- `mold_worker` is capable of reforking at multiple intervals; by default it will trigger one mold promotion and a phased refork at 1000 requests, but you can pass 1..n intervals instead and it will trigger a refork as it passes each
-- `mold_worker` will, at boot and during phased restart via USR1, fork all worker processes directly from the cluster parent; molds at this point are just a memory cost with no benefit.
-- Mold processes will _not_ become more efficient over time as they have stopped taking traffic; to see additional benefits, add an additional refork interval at the end to promote a new more complete mold, or use SIGURG to promote whatever worker has the highest request count to mold and replace all the other workers with reforks.
+- `mold_worker` is capable of triggering a forced refork at multiple thresholds; by default it will trigger one mold promotion and a phased refork the first time any worker passes 1000 requests, but you can pass 1..n thresholds instead and it will trigger a refork as soon as a worker passes those request counts in order. E.g. with `mold_worker(400, 800, 1600)`, the first time a worker makes it to 400 requests, it will be promoted to mold, replaced with a new refork, and then all other workers will be replaced with reforks as well; once one of these makes it to 800 total requests, that worker will be promoted to mold, the old mold will be terminated, and the refork process runs again, until there are no more thresholds. After this point there are no more forced promotions or reforks, they will only occur as worker processes are terminated by external causes (molds can also be terminated, but promotion of a new mold will not take place until a refork is required).
+- SIGURG will terminate any existing mold, promote the worker with the highest request count to mold, and trigger a full refork from that mold
+- SIGUSR1 will terminate any existing mold as well as any workers, reset the threshold series provided in config, and fork all new workers from the cluster parent
+- `mold_worker` will also fork workers directly from the cluster parent at initial boot, as a mold adds no value at this point
+- Mold processes will _not_ become more efficient over time as they have stopped taking traffic; to see additional benefits, add an additional refork threshold at the end of your config to promote a new more complete mold, or use SIGURG to promote whatever worker has the highest request count to mold and replace all the other workers with reforks.
 
 ### Mold-Worker Migration Guide (From Fork-Worker)
 
